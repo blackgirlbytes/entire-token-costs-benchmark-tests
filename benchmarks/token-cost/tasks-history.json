@@ -1,0 +1,68 @@
+[
+  {
+    "id": "entire-overhead-probe",
+    "kind": "answer",
+    "base": "origin/main",
+    "_note": "Fixed-overhead probe. A near-trivial question that needs no history. Any baseline-vs-entire cost delta here is pure fixed Entire overhead (skill-file load + `entire status`), not retrieval value. Subtract this delta from the other tasks to estimate marginal retrieval savings. Compare against the per-trial `entire_marginal~` figure in the summary.",
+    "prompt": "In one or two sentences, state this project's name and which package manager / build tool it uses. Answer directly from the current repository.",
+    "acceptanceCriteria": [
+      "Names the project correctly.",
+      "Names the package manager or build tool correctly.",
+      "Stays brief and does not investigate project history."
+    ]
+  },
+  {
+    "id": "why-removed-behavior",
+    "kind": "answer",
+    "base": "origin/main",
+    "draft": true,
+    "_note": "TEMPLATE — fill in a real removed/changed behavior before running with --include-drafts. This is the scenario where Entire should win on cost: the answer is in history, not current source, so baseline must crawl full diff history while Entire reads one checkpoint. Replace <BEHAVIOR> and the file hints with a feature that was actually removed or significantly reworked in this repo's history.",
+    "prompt": "Explain why <BEHAVIOR> was removed (or significantly changed) and what replaced it. The current source no longer contains it, so ground the answer in recorded history — commits, diffs, and Entire checkpoint/session evidence — not in the present code.",
+    "acceptanceCriteria": [
+      "Correctly identifies when and why <BEHAVIOR> was removed or changed.",
+      "Cites the specific commit(s) and/or checkpoint/session evidence that records the decision.",
+      "Describes what replaced it, if anything.",
+      "Does not fabricate a rationale that the recorded history does not support."
+    ]
+  },
+  {
+    "id": "restore-removed-behavior",
+    "kind": "code",
+    "base": "TODO-commit-sha-after-the-removal",
+    "draft": true,
+    "installDependencies": true,
+    "checks": ["npm run build"],
+    "_note": "TEMPLATE — set `base` to a commit AFTER <BEHAVIOR> was removed, and fill <BEHAVIOR>. Baseline must reconstruct the removed implementation from scratch by reading diffs; the Entire arm can recover the prior implementation/intent from the checkpoint that captured it. This is a code task, so checks gate acceptance.",
+    "prompt": "Restore <BEHAVIOR> that used to exist in this project but was later removed. Match the original behavior and integration points as closely as the recorded history supports. Keep the change narrow.",
+    "acceptanceCriteria": [
+      "Re-implements <BEHAVIOR> consistent with how it previously worked.",
+      "Wires it back into the same integration points it used before.",
+      "Keeps the change narrow and avoids unrelated edits.",
+      "npm run build passes."
+    ]
+  },
+  {
+    "id": "continue-partial-feature",
+    "kind": "continuation",
+    "base": "origin/main",
+    "draft": true,
+    "installDependencies": true,
+    "checks": ["npm run build"],
+    "_note": "TEMPLATE for the cross-session continuation scenario — Entire's home-field workflow. The harness runs `seed.prompt` first (session A, Entire-enabled) to make PARTIAL progress and checkpoint it, then both arms continue from that seed commit. Baseline has only the half-finished code and must reconstruct intent/approach; the Entire arm can read the prior session's checkpoint. Seed once via `node scripts/token-benchmark.mjs seed --task continue-partial-feature --execute`, then run with `--task continue-partial-feature --seed-base <sha> --include-drafts`. Replace <FEATURE> with something real for this repo.",
+    "seed": {
+      "prompt": "Begin implementing <FEATURE>. Make partial progress only: lay out the file structure, stub the main functions with clear TODOs, and write a short plan in a comment or PLAN file. Do NOT finish the implementation. Explain your intended approach in your final message.",
+      "installDependencies": true,
+      "checks": [],
+      "acceptanceCriteria": [
+        "Creates the skeleton and a written plan for <FEATURE> without completing it."
+      ]
+    },
+    "prompt": "A previous session started implementing <FEATURE> but did not finish. Continue and complete it, following the approach the earlier work established. Keep the change narrow and consistent with the existing partial work.",
+    "acceptanceCriteria": [
+      "Completes <FEATURE> consistent with the partial work's established approach.",
+      "Does not contradict or rip out the seed session's design without reason.",
+      "Keeps the change narrow.",
+      "npm run build passes."
+    ]
+  }
+]

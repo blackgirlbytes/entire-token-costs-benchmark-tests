@@ -108,3 +108,38 @@ uses it as an additional research layer instead of a replacement for source
 rediscovery. The promising direction is to make Entire usage narrower,
 precomputed, or task-gated so it supplies only the context that baseline would
 otherwise spend many source/git reads reconstructing.
+
+## Addendum — methodology rework (this branch)
+
+A reviewer pass concluded the original benchmark measured the right metric on
+the wrong scenario: every trial was a single cold session, so Entire was
+structurally additive (it could only add a retrieval layer, never substitute for
+rediscovery the baseline already does cheaply). This branch makes four changes:
+
+1. **Cost, not raw tokens.** The summarizer now reports billable USD cost via a
+   per-model pricing table (`--pricing` / `BENCH_PRICING_JSON`), charging
+   cache-read input at the discounted rate, plus a per-token-class breakdown
+   (fresh-input / cached-input / output / reasoning). Raw `total_tokens`
+   over-penalized the Entire arm, whose extra input is largely cached.
+
+2. **Per-task paired deltas, geometric mean.** Replaced the summed-total
+   `savingsPct` (dominated by the single most expensive task — the reason the
+   headline flipped between runs) with per-(task,rep) baseline-vs-mode ratios
+   aggregated by geometric mean + median, plus per-task rows.
+
+3. **Fixed vs marginal Entire cost.** Each trial now reports an approximate
+   `entire_marginal~` token count (heuristic JSONL scan of Entire command output
+   + skill-file reads), and a new `entire-overhead-probe` task isolates the fixed
+   skill-load/`entire status` overhead on a no-history question.
+
+4. **History-dependent + continuation scenarios.** Added
+   `tasks-history.json` (why/removed-behavior templates) and a `seed` phase +
+   `continuation` task kind so session A checkpoints partial work and both arms
+   continue from it — the workflow where Entire substitution should actually pay
+   off. Templates are `draft:true` pending repo-specific fill-in.
+
+Open items the next run must resolve before any headline: fix or exclude
+`entire checkpoint search` (still empty/timeout here, so the cheapest retrieval
+path is untested), set real model prices, fill in the history/continuation
+templates, and raise replicates once a single task type shows a stable per-task
+delta.

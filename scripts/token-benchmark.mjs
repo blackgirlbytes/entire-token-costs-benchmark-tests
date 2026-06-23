@@ -18,7 +18,78 @@ const DEFAULTS = {
   maxRevisions: 1,
   limit: 3,
   modes: "baseline,entire",
+  pricing: process.env.BENCH_PRICING_JSON || "",
+  includeDrafts: false,
+  seedBase: "",
+  task: "",
 };
+
+// Per-million-token USD pricing used to convert raw token counts into a
+// billable-cost estimate. Raw `total_tokens` is the WRONG comparison unit
+// between arms: the Entire arm inflates *input* tokens (skill file + checkpoint
+// JSON), but cache-read input is ~10x cheaper to bill, so a token-count delta
+// does not match the dollar delta. Cost weighting is what the headline should
+// report.
+//
+// IMPORTANT: these are placeholders. Override with your real model prices via
+// `--pricing <path-or-json>` or BENCH_PRICING_JSON before trusting cost output.
+// `cachedInput` is the discounted rate charged for cache-read input tokens.
+// `output` covers completion tokens; set `reasoningInOutput:false` for a model
+// whose usage reports reasoning tokens *outside* output_tokens.
+const DEFAULT_PRICING = {
+  reasoningInOutput: true,
+  models: {
+    "gpt-5.5": { input: 1.25, cachedInput: 0.125, output: 10.0 },
+    "gpt-5.4": { input: 1.25, cachedInput: 0.125, output: 10.0 },
+    default: { input: 1.0, cachedInput: 0.1, output: 8.0 },
+  },
+};
+
+function loadPricing(value) {
+  if (!value) {
+    return DEFAULT_PRICING;
+  }
+  let raw = value;
+  if (!value.trim().startsWith("{")) {
+    raw = fs.readFileSync(value, "utf8");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`--pricing must be a JSON object or path to one: ${error.message}`);
+  }
+  const models = parsed.models || parsed;
+  return {
+    reasoningInOutput:
+      parsed.reasoningInOutput === undefined ? true : Boolean(parsed.reasoningInOutput),
+    models: { ...DEFAULT_PRICING.models, ...models },
+  };
+}
+
+function modelRate(pricing, model) {
+  return pricing.models[model] || pricing.models.default || DEFAULT_PRICING.models.default;
+}
+
+// costForUsage converts a usage record into a billable USD estimate, charging
+// cache-read input at the discounted rate and fresh input at the full rate.
+function costForUsage(usage, model, pricing) {
+  if (!usage) {
+    return 0;
+  }
+  const rate = modelRate(pricing, model);
+  const cached = usage.cached_input_tokens || 0;
+  const freshInput = Math.max((usage.input_tokens || 0) - cached, 0);
+  const reasoning = usage.reasoning_output_tokens || 0;
+  const output = (usage.output_tokens || 0) + (pricing.reasoningInOutput ? 0 : reasoning);
+  return (
+    (freshInput * rate.input + cached * rate.cachedInput + output * rate.output) / 1_000_000
+  );
+}
+
+function round4(value) {
+  return Math.round(value * 10000) / 10000;
+}
 
 const MODE_CONFIGS = {
   baseline: {
@@ -80,6 +151,7 @@ const MODE_CONFIGS = {
 
 const usage = `Usage:
   node scripts/token-benchmark.mjs setup [options]
+  node scripts/token-benchmark.mjs seed --task <id> [--dry-run|--execute] [options]
   node scripts/token-benchmark.mjs run [--dry-run|--execute] [options]
   node scripts/token-benchmark.mjs summarize --run-dir <path>
 
@@ -96,6 +168,11 @@ Options:
   --limit <n>              Max tasks from manifest. Default: ${DEFAULTS.limit}
   --modes <csv>            Comma-separated benchmark modes. Default: ${DEFAULTS.modes}
                            Available: ${Object.keys(MODE_CONFIGS).join(", ")}
+  --pricing <path|json>    Per-model USD pricing for the billable-cost metric.
+                           JSON object or path to one. See DEFAULT_PRICING.
+  --task <id>              Task ID (required for 'seed'; optional filter for 'run').
+  --seed-base <sha>        Pre-seeded continuation base commit; skips auto-seed.
+  --include-drafts         Include tasks marked "draft": true in the manifest.
   --execute                Actually launch Codex child sessions.
   --dry-run                Print the planned trials without launching agents.
 `;
@@ -155,6 +232,18 @@ function parseArgs(argv) {
       case "--modes":
         opts.modes = next();
         break;
+      case "--pricing":
+        opts.pricing = next();
+        break;
+      case "--seed-base":
+        opts.seedBase = next();
+        break;
+      case "--task":
+        opts.task = next();
+        break;
+      case "--include-drafts":
+        opts.includeDrafts = true;
+        break;
       case "--run-dir":
         opts.runDir = next();
         break;
@@ -174,7 +263,7 @@ function parseArgs(argv) {
     }
   }
 
-  if (!command || !["setup", "run", "summarize"].includes(command)) {
+  if (!command || !["setup", "run", "summarize", "seed"].includes(command)) {
     throw new Error(`Unknown or missing command.\n\n${usage}`);
   }
   if (opts.execute && opts.dryRun) {
@@ -193,6 +282,7 @@ function parseArgs(argv) {
     throw new Error("--limit must be a positive integer.");
   }
   opts.modes = parseModes(opts.modes);
+  opts.pricing = loadPricing(opts.pricing);
 
   return opts;
 }
@@ -369,12 +459,25 @@ function alignOriginWithSource(source, dest, dryRun) {
   run("git", ["fetch", "origin", "--tags"], { cwd: dest, dryRun });
 }
 
-function readTasks(manifestPath, limit) {
+function readTasks(manifestPath, limit, opts = {}) {
   const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
   if (!Array.isArray(parsed)) {
     throw new Error("Task manifest must be a JSON array.");
   }
-  return parsed.slice(0, limit);
+  let tasks = parsed;
+  // Draft tasks (e.g. history-dependent templates awaiting repo-specific
+  // commit hashes) are skipped unless explicitly included, so the default
+  // run never trips over a placeholder `base`.
+  if (!opts.includeDrafts) {
+    tasks = tasks.filter((task) => !task.draft);
+  }
+  if (opts.task) {
+    tasks = tasks.filter((task) => task.id === opts.task);
+    if (!tasks.length) {
+      throw new Error(`No task with id "${opts.task}" in ${manifestPath}.`);
+    }
+  }
+  return tasks.slice(0, limit);
 }
 
 function shuffle(items) {
@@ -689,6 +792,88 @@ function addUsage(a, b) {
   };
 }
 
+// Marginal Entire-attributable cost proxy (separates fixed/marginal Entire
+// overhead from total task cost). Total worker tokens conflate two things:
+// the conventional source/git investigation the baseline also does, and the
+// *extra* context the Entire arm pulls in (skill file + `entire` command
+// output). This walks the worker JSONL and approximates the token volume the
+// worker ingested from Entire-specific commands and skill-file reads, so a
+// summary can show how much of an Entire arm's spend is Entire-attributable
+// rather than shared task work.
+//
+// Heuristic and best-effort: codex `--json` event shapes vary by version, so we
+// deep-scan every event for command-like fields paired with output-like fields
+// and only count outputs whose command targets Entire. Returns 0 cleanly when
+// nothing matches. Tokens are approximated at ~4 chars/token.
+const ENTIRE_COMMAND_RE = /\bentire\b\s+(status|checkpoint|search|explain|trail)/i;
+const ENTIRE_SKILL_RE = /using-entire|SKILL\.md|\.codex\/skills|\.entire\//i;
+const COMMAND_KEYS = new Set(["command", "cmd", "input", "call", "arguments", "args"]);
+const OUTPUT_KEYS = new Set(["output", "aggregated_output", "stdout", "result", "content", "text"]);
+
+function approxTokens(chars) {
+  return Math.ceil(chars / 4);
+}
+
+function asText(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+// scanEntireEvidence inspects one parsed JSONL event object. If it looks like a
+// command execution targeting Entire (or a read of an Entire/skill file), it
+// returns the approximate output-token volume the worker ingested from it.
+function scanEntireEvidence(node) {
+  if (!node || typeof node !== "object") {
+    return 0;
+  }
+  let commandText = "";
+  let outputText = "";
+  for (const [key, value] of Object.entries(node)) {
+    const lower = key.toLowerCase();
+    if (COMMAND_KEYS.has(lower)) {
+      commandText += ` ${asText(value)}`;
+    } else if (OUTPUT_KEYS.has(lower) && typeof value === "string") {
+      outputText += value;
+    }
+  }
+  let total = 0;
+  if (commandText && (ENTIRE_COMMAND_RE.test(commandText) || ENTIRE_SKILL_RE.test(commandText))) {
+    // Charge the output if present, else the command echo itself.
+    total += approxTokens(outputText.length || commandText.length);
+  }
+  for (const value of Object.values(node)) {
+    if (value && typeof value === "object") {
+      total += scanEntireEvidence(value);
+    }
+  }
+  return total;
+}
+
+function parseEntireMarginal(jsonlPath) {
+  if (!fs.existsSync(jsonlPath)) {
+    return 0;
+  }
+  const lines = fs.readFileSync(jsonlPath, "utf8").split("\n").filter(Boolean);
+  let approxOutputTokens = 0;
+  for (const line of lines) {
+    try {
+      approxOutputTokens += scanEntireEvidence(JSON.parse(line));
+    } catch {
+      // Ignore non-JSON lines.
+    }
+  }
+  return approxOutputTokens;
+}
+
 function parseReviewerVerdict(lastMessagePath) {
   if (!fs.existsSync(lastMessagePath)) {
     return { verdict: "REVISE", feedback: "Reviewer produced no final message.", confidence: 0 };
@@ -799,6 +984,7 @@ function runTrial({ task, mode, arm, rep, runDir, opts }) {
   let finalVerdict = { verdict: "REVISE", feedback: "No review completed.", confidence: 0 };
   let workerUsage = emptyUsage();
   let reviewerUsage = emptyUsage();
+  let workerMarginalApproxTokens = 0;
 
   for (let revision = 0; revision <= opts.maxRevisions; revision += 1) {
     const feedbackPath = path.join(benchDir, "review-feedback.md");
@@ -856,10 +1042,12 @@ function runTrial({ task, mode, arm, rep, runDir, opts }) {
       verdict,
       workerUsage: parseUsage(workerJsonlPath),
       reviewerUsage: parseUsage(reviewerJsonlPath),
+      workerMarginalApproxTokens: parseEntireMarginal(workerJsonlPath),
     };
     trialMeta.revisions.push(revisionRecord);
     workerUsage = addUsage(workerUsage, revisionRecord.workerUsage);
     reviewerUsage = addUsage(reviewerUsage, revisionRecord.reviewerUsage);
+    workerMarginalApproxTokens += revisionRecord.workerMarginalApproxTokens;
     finalVerdict = verdict;
 
     if (verdict.verdict === "PASS") {
@@ -874,20 +1062,153 @@ function runTrial({ task, mode, arm, rep, runDir, opts }) {
   trialMeta.finalVerdict = finalVerdict;
   trialMeta.workerUsage = workerUsage;
   trialMeta.reviewerUsage = reviewerUsage;
+  trialMeta.workerMarginalApproxTokens = workerMarginalApproxTokens;
+  trialMeta.workerCostUsd = round4(costForUsage(workerUsage, opts.workerModel, opts.pricing));
+  trialMeta.reviewerCostUsd = round4(costForUsage(reviewerUsage, opts.reviewerModel, opts.pricing));
   trialMeta.finalStatus = gitStatus(trialDir);
   trialMeta.finalDiffPath = ".bench/diff-final.patch";
   fs.writeFileSync(path.join(benchDir, "diff-final.patch"), gitDiff(trialDir));
   fs.writeFileSync(path.join(benchDir, "trial-meta.json"), JSON.stringify(trialMeta, null, 2));
   console.log(
-    `[result] ${task.id} ${mode} ${finalVerdict.verdict} worker_tokens=${workerUsage.total_tokens} reviewer_tokens=${reviewerUsage.total_tokens}`,
+    `[result] ${task.id} ${mode} ${finalVerdict.verdict} worker_tokens=${workerUsage.total_tokens} worker_cost=$${trialMeta.workerCostUsd} entire_marginal~=${workerMarginalApproxTokens}`,
   );
 
   return trialMeta;
 }
 
+// resolveContinuationBase rewrites a continuation task's `base` to the seed
+// commit that "session A" produced, so both arms continue from identical code
+// while only the Entire arm can read the checkpoint metadata of the prior work.
+// Non-continuation tasks pass through untouched.
+//
+// Resolution order: explicit --seed-base wins; otherwise auto-seed via
+// seedContinuation (skipped in dry-run). If neither yields a base, the task is
+// skipped with a warning rather than breaking the whole run.
+function resolveContinuationBase(task, opts, runMeta) {
+  const isContinuation = task.kind === "continuation" || Boolean(task.seed);
+  if (!isContinuation) {
+    return task;
+  }
+  if (opts.seedBase) {
+    console.log(`[seed] ${task.id}: using --seed-base ${opts.seedBase}`);
+    return { ...task, base: opts.seedBase };
+  }
+  if (opts.dryRun) {
+    console.log(`[dry-run] [seed] would seed continuation task ${task.id} from ${task.base}`);
+    return task;
+  }
+  try {
+    const sha = seedContinuation(task, opts);
+    console.log(`[seed] ${task.id}: continuation base ${sha}`);
+    runMeta.warnings.push(`Seeded continuation task ${task.id} at ${sha}`);
+    return { ...task, base: sha };
+  } catch (error) {
+    const warning = `Skipping continuation task ${task.id}: seed failed (${error.message}). Provide --seed-base or run 'seed' first.`;
+    console.warn(`[warning] ${warning}`);
+    runMeta.warnings.push(warning);
+    return null;
+  }
+}
+
+// seedContinuation runs the "session A" partial-work phase for a continuation
+// task inside the Entire-enabled root, commits it so the commit carries an
+// Entire-Checkpoint trailer (git hooks attach it from the codex session that
+// just ran), publishes the seed commit + checkpoint metadata to origin, and
+// makes the commit available in the baseline root too. Returns the seed SHA.
+//
+// NOTE: requires `--execute`. This path cannot be validated without a live
+// codex + Entire install; treat it as a scaffold and verify end-to-end before
+// trusting continuation numbers.
+function seedContinuation(task, opts) {
+  if (!task.seed || !task.seed.prompt) {
+    throw new Error(`continuation task ${task.id} needs a "seed" with a "prompt"`);
+  }
+  const seedDir = path.join(opts.runsRoot, "_seeds", slugPart(task.id));
+  const branch = `bench-seed/${slugPart(task.id)}`;
+
+  // Fresh worktree from the task base in the Entire-enabled root.
+  run("git", ["worktree", "remove", "--force", seedDir], {
+    cwd: opts.entireRoot,
+    check: false,
+  });
+  fs.mkdirSync(path.dirname(seedDir), { recursive: true });
+  run("git", ["worktree", "add", "-B", branch, seedDir, task.base], { cwd: opts.entireRoot });
+
+  // Enable Entire and install git hooks so the seed commit gets a checkpoint
+  // trailer, and register codex so its lifecycle hooks create checkpoints.
+  run("entire", ["enable", "--force"], { cwd: seedDir, check: false });
+  run("entire", ["agent", "add", "codex", "--force"], { cwd: seedDir, check: false });
+
+  const benchDir = path.join(seedDir, ".bench");
+  fs.mkdirSync(benchDir, { recursive: true });
+  const seedTask = {
+    ...task,
+    prompt: task.seed.prompt,
+    acceptanceCriteria: task.seed.acceptanceCriteria || task.acceptanceCriteria,
+    checks: task.seed.checks || [],
+    installDependencies: task.seed.installDependencies,
+  };
+  maybeInstallDependencies(seedDir, benchDir, seedTask, process.env);
+
+  const promptPath = path.join(benchDir, "seed.prompt.md");
+  fs.writeFileSync(promptPath, buildWorkerPrompt(seedTask, "entire", 0, ""));
+  codexExec({
+    trialDir: seedDir,
+    model: opts.workerModel,
+    promptPath,
+    jsonlPath: path.join(benchDir, "seed.jsonl"),
+    lastMessagePath: path.join(benchDir, "seed.last.md"),
+    env: { ...process.env, BENCH_MODE: "seed" },
+    sandbox: "danger-full-access",
+  });
+  runChecks(seedDir, benchDir, seedTask, process.env, 0);
+
+  // Commit the partial work; the prepare-commit-msg hook attaches the
+  // Entire-Checkpoint trailer for the codex session that just ran.
+  run("git", ["add", "-A"], { cwd: seedDir });
+  run("git", ["commit", "-m", `seed: partial work for ${task.id}`], {
+    cwd: seedDir,
+    check: false,
+  });
+  const sha = run("git", ["rev-parse", "HEAD"], { cwd: seedDir }).stdout.trim();
+
+  // Publish the seed commit and checkpoint metadata so the baseline root can
+  // start from the same code (without checkpoint access) and the Entire root
+  // can read the prior session's checkpoints.
+  run("git", ["push", "--force", "origin", `${branch}:${branch}`], { cwd: seedDir, check: false });
+  run("git", ["push", "origin", "entire/checkpoints/v1:entire/checkpoints/v1"], {
+    cwd: seedDir,
+    check: false,
+  });
+  run("git", ["fetch", "origin", branch], { cwd: opts.baselineRoot, check: false });
+
+  return sha;
+}
+
+function seedCommand(opts) {
+  if (!opts.task) {
+    throw new Error("seed requires --task <id>.");
+  }
+  const manifest = resolveFromRepo(opts.manifest);
+  const [task] = readTasks(manifest, 1, { includeDrafts: true, task: opts.task });
+  if (!task) {
+    throw new Error(`No task with id "${opts.task}".`);
+  }
+  if (opts.dryRun) {
+    console.log(`[dry-run] would seed ${task.id} from ${task.base} in ${opts.entireRoot}`);
+    return;
+  }
+  const sha = seedContinuation(task, opts);
+  console.log(`Seed commit for ${task.id}: ${sha}`);
+  console.log(`Re-run with: --task ${task.id} --seed-base ${sha}`);
+}
+
 function runBenchmark(opts) {
   const manifest = resolveFromRepo(opts.manifest);
-  const tasks = readTasks(manifest, opts.limit);
+  const tasks = readTasks(manifest, opts.limit, {
+    includeDrafts: opts.includeDrafts,
+    task: opts.task,
+  });
   const runId = `run-${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomBytes(3).toString("hex")}`;
   const runDir = path.join(opts.runsRoot, runId);
   const runMeta = {
@@ -897,6 +1218,7 @@ function runBenchmark(opts) {
     dryRun: opts.dryRun,
     workerModel: opts.workerModel,
     reviewerModel: opts.reviewerModel,
+    pricing: opts.pricing,
     modes: opts.modes,
     replicates: opts.replicates,
     maxRevisions: opts.maxRevisions,
@@ -915,13 +1237,17 @@ function runBenchmark(opts) {
   fs.writeFileSync(path.join(runDir, "run-meta.json"), JSON.stringify(runMeta, null, 2));
 
   for (const task of tasks) {
+    const resolvedTask = resolveContinuationBase(task, opts, runMeta);
+    if (!resolvedTask) {
+      continue;
+    }
     for (let rep = 1; rep <= opts.replicates; rep += 1) {
       const modes = shuffle(opts.modes);
       modes.forEach((mode, index) => {
         const arm = `arm-${String.fromCharCode(97 + index)}`;
-        const trial = runTrial({ task, mode, arm, rep, runDir, opts });
+        const trial = runTrial({ task: resolvedTask, mode, arm, rep, runDir, opts });
         runMeta.trials.push({
-          taskId: task.id,
+          taskId: resolvedTask.id,
           rep,
           arm,
           mode,
@@ -930,6 +1256,9 @@ function runBenchmark(opts) {
           finalVerdict: trial.finalVerdict,
           workerUsage: trial.workerUsage,
           reviewerUsage: trial.reviewerUsage,
+          workerMarginalApproxTokens: trial.workerMarginalApproxTokens,
+          workerCostUsd: trial.workerCostUsd,
+          reviewerCostUsd: trial.reviewerCostUsd,
         });
         fs.writeFileSync(path.join(runDir, "run-meta.json"), JSON.stringify(runMeta, null, 2));
       });
@@ -946,16 +1275,111 @@ function runBenchmark(opts) {
   }
 }
 
+function geomean(ratios) {
+  const valid = ratios.filter((r) => Number.isFinite(r) && r > 0);
+  if (!valid.length) {
+    return null;
+  }
+  const meanLog = valid.reduce((sum, r) => sum + Math.log(r), 0) / valid.length;
+  return Math.exp(meanLog);
+}
+
+function median(values) {
+  const valid = values.filter((v) => Number.isFinite(v)).sort((a, b) => a - b);
+  if (!valid.length) {
+    return null;
+  }
+  const mid = Math.floor(valid.length / 2);
+  return valid.length % 2 ? valid[mid] : (valid[mid - 1] + valid[mid]) / 2;
+}
+
+function average(values) {
+  const valid = values.filter((v) => Number.isFinite(v));
+  if (!valid.length) {
+    return 0;
+  }
+  return valid.reduce((sum, v) => sum + v, 0) / valid.length;
+}
+
+// pairedDeltasForMode pairs every (taskId, rep) trial of `mode` with the
+// matching baseline trial and reports per-pair ratios. Ratios <1 mean the mode
+// is cheaper than baseline (a saving). We aggregate with the geometric mean of
+// per-pair ratios, NOT a summed-total percentage: a summed total is dominated
+// by whichever single task happens to be the most expensive, which is exactly
+// how the earlier headline flipped between runs.
+function pairedDeltasForMode(trialMetas, mode) {
+  const byKey = new Map();
+  for (const trial of trialMetas) {
+    const key = `${trial.taskId}::${trial.rep}`;
+    const entry = byKey.get(key) || {};
+    entry[trial.mode] = trial;
+    byKey.set(key, entry);
+  }
+
+  const tokenRatios = [];
+  const costRatios = [];
+  const perTaskAgg = new Map();
+  for (const [, entry] of byKey) {
+    const base = entry.baseline;
+    const cur = entry[mode];
+    if (!base || !cur) {
+      continue;
+    }
+    const baseTokens = base.workerUsage?.total_tokens || 0;
+    const curTokens = cur.workerUsage?.total_tokens || 0;
+    const baseCost = base.workerCostUsd || 0;
+    const curCost = cur.workerCostUsd || 0;
+    const tokenRatio = baseTokens > 0 ? curTokens / baseTokens : null;
+    const costRatio = baseCost > 0 ? curCost / baseCost : null;
+    if (tokenRatio) tokenRatios.push(tokenRatio);
+    if (costRatio) costRatios.push(costRatio);
+
+    const taskId = cur.taskId;
+    const agg = perTaskAgg.get(taskId) || { baseTokens: [], curTokens: [], baseCost: [], curCost: [] };
+    agg.baseTokens.push(baseTokens);
+    agg.curTokens.push(curTokens);
+    agg.baseCost.push(baseCost);
+    agg.curCost.push(curCost);
+    perTaskAgg.set(taskId, agg);
+  }
+
+  const perTask = [...perTaskAgg.entries()].map(([taskId, agg]) => ({
+    taskId,
+    baselineTokensAvg: Math.round(average(agg.baseTokens)),
+    modeTokensAvg: Math.round(average(agg.curTokens)),
+    baselineCostUsdAvg: round4(average(agg.baseCost)),
+    modeCostUsdAvg: round4(average(agg.curCost)),
+    costRatio: average(agg.baseCost) > 0 ? round4(average(agg.curCost) / average(agg.baseCost)) : null,
+  }));
+
+  const tokenGeo = geomean(tokenRatios);
+  const costGeo = geomean(costRatios);
+  return {
+    mode,
+    pairs: Math.min(tokenRatios.length, costRatios.length) || tokenRatios.length,
+    tokenRatioGeomean: tokenGeo === null ? null : round4(tokenGeo),
+    tokenRatioMedian: median(tokenRatios) === null ? null : round4(median(tokenRatios)),
+    costRatioGeomean: costGeo === null ? null : round4(costGeo),
+    costRatioMedian: median(costRatios) === null ? null : round4(median(costRatios)),
+    // Positive savings% means the mode is cheaper than baseline on cost.
+    costSavingsPctGeomean: costGeo === null ? null : round4((1 - costGeo) * 100),
+    perTask,
+  };
+}
+
 function summarize(runDir) {
   const metaPath = path.join(runDir, "run-meta.json");
   const runMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+  const pricing = runMeta.pricing || DEFAULT_PRICING;
+  const workerModel = runMeta.workerModel;
+  const reviewerModel = runMeta.reviewerModel;
   const trialMetas = [];
 
   for (const trial of runMeta.trials || []) {
     const trialMetaPath = path.join(trial.trialDir, ".bench", "trial-meta.json");
     if (fs.existsSync(trialMetaPath)) {
       const trialMeta = JSON.parse(fs.readFileSync(trialMetaPath, "utf8"));
-      refreshTrialUsage(trialMeta);
+      refreshTrialUsage(trialMeta, pricing, workerModel, reviewerModel);
       fs.writeFileSync(trialMetaPath, JSON.stringify(trialMeta, null, 2));
       trialMetas.push(trialMeta);
     }
@@ -973,6 +1397,9 @@ function summarize(runDir) {
         fail: 0,
         workerUsage: emptyUsage(),
         reviewerUsage: emptyUsage(),
+        workerCostUsd: 0,
+        reviewerCostUsd: 0,
+        workerMarginalApproxTokens: 0,
       };
     bucket.trials += 1;
     const verdict = trial.finalVerdict?.verdict || "REVISE";
@@ -985,38 +1412,38 @@ function summarize(runDir) {
     }
     bucket.workerUsage = addUsage(bucket.workerUsage, trial.workerUsage || emptyUsage());
     bucket.reviewerUsage = addUsage(bucket.reviewerUsage, trial.reviewerUsage || emptyUsage());
+    bucket.workerCostUsd = round4(bucket.workerCostUsd + (trial.workerCostUsd || 0));
+    bucket.reviewerCostUsd = round4(bucket.reviewerCostUsd + (trial.reviewerCostUsd || 0));
+    bucket.workerMarginalApproxTokens += trial.workerMarginalApproxTokens || 0;
     byMode.set(trial.mode, bucket);
   }
+
+  const nonBaselineModes = [...byMode.keys()].filter((m) => m !== "baseline");
+  const pairedDeltas = byMode.has("baseline")
+    ? nonBaselineModes.map((mode) => pairedDeltasForMode(trialMetas, mode))
+    : [];
 
   const summary = {
     runId: runMeta.runId,
     runDir,
-    workerModel: runMeta.workerModel,
-    reviewerModel: runMeta.reviewerModel,
+    workerModel,
+    reviewerModel,
+    pricingNote:
+      "Costs use --pricing (placeholder DEFAULT_PRICING if unset). Compare cost, not raw total_tokens.",
     modes: [...byMode.values()],
+    pairedDeltas,
     trials: trialMetas.map((trial) => ({
       taskId: trial.taskId,
       mode: trial.mode,
       rep: trial.rep,
       verdict: trial.finalVerdict?.verdict,
       workerTokens: trial.workerUsage?.total_tokens || 0,
+      workerCostUsd: trial.workerCostUsd || 0,
+      workerMarginalApproxTokens: trial.workerMarginalApproxTokens || 0,
       reviewerTokens: trial.reviewerUsage?.total_tokens || 0,
       trialDir: trial.trialDir,
     })),
   };
-
-  const baseline = byMode.get("baseline");
-  const entire = byMode.get("entire");
-  if (baseline && entire && baseline.workerUsage.total_tokens > 0) {
-    summary.workerTokenDelta = {
-      baselineTokens: baseline.workerUsage.total_tokens,
-      entireTokens: entire.workerUsage.total_tokens,
-      savingsTokens: baseline.workerUsage.total_tokens - entire.workerUsage.total_tokens,
-      savingsPct:
-        (baseline.workerUsage.total_tokens - entire.workerUsage.total_tokens) /
-        baseline.workerUsage.total_tokens,
-    };
-  }
 
   fs.writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(summary, null, 2));
   fs.writeFileSync(path.join(runDir, "summary.md"), renderSummary(summary));
@@ -1031,24 +1458,45 @@ function renderSummary(summary) {
     `Worker model: ${summary.workerModel}`,
     `Reviewer model: ${summary.reviewerModel}`,
     "",
+    `> ${summary.pricingNote}`,
+    "",
     "## Modes",
     "",
   ];
 
   for (const mode of summary.modes) {
+    const u = mode.workerUsage;
+    const fresh = Math.max((u.input_tokens || 0) - (u.cached_input_tokens || 0), 0);
     lines.push(
-      `- ${mode.mode}: trials=${mode.trials}, pass=${mode.pass}, revise=${mode.revise}, fail=${mode.fail}, worker_tokens=${mode.workerUsage.total_tokens}, reviewer_tokens=${mode.reviewerUsage.total_tokens}`,
+      `- ${mode.mode}: trials=${mode.trials}, pass=${mode.pass}, revise=${mode.revise}, fail=${mode.fail}`,
     );
+    lines.push(
+      `  worker: cost=$${mode.workerCostUsd}, total_tokens=${u.total_tokens}, fresh_in=${fresh}, cached_in=${u.cached_input_tokens || 0}, out=${u.output_tokens || 0}, reasoning=${u.reasoning_output_tokens || 0}`,
+    );
+    lines.push(
+      `  entire-attributable (marginal, approx): ~${mode.workerMarginalApproxTokens} tokens of skill/command output ingested`,
+    );
+    lines.push(`  reviewer: cost=$${mode.reviewerCostUsd}, total_tokens=${mode.reviewerUsage.total_tokens}`);
   }
 
-  if (summary.workerTokenDelta) {
+  if (summary.pairedDeltas && summary.pairedDeltas.length) {
     lines.push("");
-    lines.push("## Worker Token Delta");
+    lines.push("## Paired Cost Deltas vs baseline");
     lines.push("");
-    lines.push(`- baseline worker tokens: ${summary.workerTokenDelta.baselineTokens}`);
-    lines.push(`- entire worker tokens: ${summary.workerTokenDelta.entireTokens}`);
-    lines.push(`- savings tokens: ${summary.workerTokenDelta.savingsTokens}`);
-    lines.push(`- savings pct: ${(summary.workerTokenDelta.savingsPct * 100).toFixed(2)}%`);
+    lines.push(
+      "Per-(task,rep) ratios aggregated by geometric mean. ratio<1 = cheaper than baseline; savings% positive = cheaper.",
+    );
+    lines.push("");
+    for (const delta of summary.pairedDeltas) {
+      lines.push(
+        `- ${delta.mode}: pairs=${delta.pairs}, cost_ratio_geomean=${delta.costRatioGeomean}, cost_ratio_median=${delta.costRatioMedian}, cost_savings%=${delta.costSavingsPctGeomean}, token_ratio_geomean=${delta.tokenRatioGeomean}`,
+      );
+      for (const t of delta.perTask) {
+        lines.push(
+          `    - ${t.taskId}: baseline=$${t.baselineCostUsdAvg}, ${delta.mode}=$${t.modeCostUsdAvg}, cost_ratio=${t.costRatio} (tokens ${t.baselineTokensAvg} -> ${t.modeTokensAvg})`,
+        );
+      }
+    }
   }
 
   lines.push("");
@@ -1056,7 +1504,7 @@ function renderSummary(summary) {
   lines.push("");
   for (const trial of summary.trials) {
     lines.push(
-      `- ${trial.taskId} ${trial.mode} rep=${trial.rep}: verdict=${trial.verdict}, worker_tokens=${trial.workerTokens}, reviewer_tokens=${trial.reviewerTokens}`,
+      `- ${trial.taskId} ${trial.mode} rep=${trial.rep}: verdict=${trial.verdict}, cost=$${trial.workerCostUsd}, worker_tokens=${trial.workerTokens}, entire_marginal~=${trial.workerMarginalApproxTokens}`,
     );
   }
 
@@ -1064,19 +1512,49 @@ function renderSummary(summary) {
   return lines.join("\n");
 }
 
-function refreshTrialUsage(trialMeta) {
+// refreshTrialUsage recomputes usage/cost/marginal from the per-revision JSONL
+// logs when they are present. Raw JSONL is intentionally gitignored, so when
+// re-summarizing a run whose logs were already cleaned, it falls back to the
+// values stored in trial-meta.json rather than zeroing the trial out.
+function refreshTrialUsage(trialMeta, pricing = DEFAULT_PRICING, workerModel, reviewerModel) {
   const benchDir = path.join(trialMeta.trialDir, ".bench");
   let workerUsage = emptyUsage();
   let reviewerUsage = emptyUsage();
+  let marginal = 0;
   for (const revision of trialMeta.revisions || []) {
     const index = revision.revision;
-    revision.workerUsage = parseUsage(path.join(benchDir, `worker-${index}.jsonl`));
-    revision.reviewerUsage = parseUsage(path.join(benchDir, `reviewer-${index}.jsonl`));
+    const workerJsonl = path.join(benchDir, `worker-${index}.jsonl`);
+    const reviewerJsonl = path.join(benchDir, `reviewer-${index}.jsonl`);
+    revision.workerUsage = fs.existsSync(workerJsonl)
+      ? parseUsage(workerJsonl)
+      : revision.workerUsage || emptyUsage();
+    revision.reviewerUsage = fs.existsSync(reviewerJsonl)
+      ? parseUsage(reviewerJsonl)
+      : revision.reviewerUsage || emptyUsage();
+    revision.workerMarginalApproxTokens = fs.existsSync(workerJsonl)
+      ? parseEntireMarginal(workerJsonl)
+      : revision.workerMarginalApproxTokens || 0;
     workerUsage = addUsage(workerUsage, revision.workerUsage);
     reviewerUsage = addUsage(reviewerUsage, revision.reviewerUsage);
+    marginal += revision.workerMarginalApproxTokens;
   }
-  trialMeta.workerUsage = workerUsage;
-  trialMeta.reviewerUsage = reviewerUsage;
+  // No parseable per-revision data (e.g. logs cleaned and revisions empty):
+  // keep whatever the trial already recorded.
+  if (workerUsage.total_tokens > 0 || !trialMeta.workerUsage) {
+    trialMeta.workerUsage = workerUsage;
+  }
+  if (reviewerUsage.total_tokens > 0 || !trialMeta.reviewerUsage) {
+    trialMeta.reviewerUsage = reviewerUsage;
+  }
+  if (marginal > 0 || trialMeta.workerMarginalApproxTokens === undefined) {
+    trialMeta.workerMarginalApproxTokens = marginal;
+  }
+  trialMeta.workerCostUsd = round4(
+    costForUsage(trialMeta.workerUsage, workerModel || trialMeta.workerModel, pricing),
+  );
+  trialMeta.reviewerCostUsd = round4(
+    costForUsage(trialMeta.reviewerUsage, reviewerModel || trialMeta.reviewerModel, pricing),
+  );
 }
 
 function main() {
@@ -1085,6 +1563,10 @@ function main() {
 
   if (opts.command === "setup") {
     setup(opts);
+    return;
+  }
+  if (opts.command === "seed") {
+    seedCommand(opts);
     return;
   }
   if (opts.command === "run") {
