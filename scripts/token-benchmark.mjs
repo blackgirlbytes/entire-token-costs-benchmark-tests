@@ -17,6 +17,55 @@ const DEFAULTS = {
   replicates: 1,
   maxRevisions: 1,
   limit: 3,
+  modes: "baseline,entire",
+};
+
+const MODE_CONFIGS = {
+  baseline: {
+    rootKind: "baseline",
+    instructions: [
+      "You are in the baseline arm of a benchmark.",
+      "Do not use Entire CLI, Entire checkpoint history, or `entire` commands. Use normal source inspection, git history, tests, and reasoning.",
+    ],
+  },
+  entire: {
+    rootKind: "entire",
+    instructions: [
+      "You are in the Entire-assisted arm of a benchmark.",
+      "Use Entire CLI strategically when it helps reduce rediscovery. Start with `entire status`.",
+      "For historical questions, start from local checkpoint metadata: run `entire checkpoint explain --json --limit 100`, filter the JSON/messages for relevant checkpoint IDs, then inspect targeted IDs with `entire checkpoint explain <id> --json --no-pager`.",
+      "If the broad checkpoint list is empty on a synthetic benchmark branch, use git commit trailers to discover IDs, for example `git log --all --format='%H %s%n%b' -- <relevant files>` and look for `Entire-Checkpoint:` before running targeted `entire checkpoint explain <id> --json --no-pager`.",
+      "Use `entire checkpoint search --json` only as an optional secondary source. If repo-scoped search returns empty or times out, record that briefly and continue with local checkpoint, code, and git evidence.",
+    ],
+  },
+  "entire-search-first": {
+    rootKind: "entire",
+    instructions: [
+      "You are in the Entire search-first ablation arm of a benchmark.",
+      "Use Entire CLI strategically when it helps reduce rediscovery. Start with `entire status`.",
+      "For historical questions, try targeted `entire checkpoint search --json` queries first, then inspect promising checkpoint IDs with `entire checkpoint explain <id> --json --no-pager`.",
+      "If repo-scoped search returns empty or times out, record that briefly and continue with normal source and git evidence.",
+    ],
+  },
+  "entire-list-first": {
+    rootKind: "entire",
+    instructions: [
+      "You are in the Entire checkpoint-list-first ablation arm of a benchmark.",
+      "Use Entire CLI strategically when it helps reduce rediscovery. Start with `entire status`.",
+      "For historical questions, start from local checkpoint metadata: run `entire checkpoint explain --json --limit 100`, filter the JSON/messages for relevant checkpoint IDs, then inspect targeted IDs with `entire checkpoint explain <id> --json --no-pager`.",
+      "Use `entire checkpoint search --json` only as an optional secondary source. If repo-scoped search returns empty or times out, record that briefly and continue with local checkpoint, code, and git evidence.",
+    ],
+  },
+  "entire-trailer-first": {
+    rootKind: "entire",
+    instructions: [
+      "You are in the Entire git-trailer-first ablation arm of a benchmark.",
+      "Use Entire CLI strategically when it helps reduce rediscovery. Start with `entire status`.",
+      "For historical questions, identify relevant files, then use git commit trailers to discover checkpoint IDs, for example `git log --all --format='%H %s%n%b' -- <relevant files>` and look for `Entire-Checkpoint:`.",
+      "Inspect only the most relevant IDs with `entire checkpoint explain <id> --json --no-pager`, then combine that evidence with focused source inspection.",
+      "Avoid broad `entire checkpoint search --json` unless git trailers do not reveal useful checkpoint IDs.",
+    ],
+  },
 };
 
 const usage = `Usage:
@@ -35,6 +84,8 @@ Options:
   --replicates <n>         Replicates per task. Default: ${DEFAULTS.replicates}
   --max-revisions <n>      Worker revision passes after review feedback. Default: ${DEFAULTS.maxRevisions}
   --limit <n>              Max tasks from manifest. Default: ${DEFAULTS.limit}
+  --modes <csv>            Comma-separated benchmark modes. Default: ${DEFAULTS.modes}
+                           Available: ${Object.keys(MODE_CONFIGS).join(", ")}
   --execute                Actually launch Codex child sessions.
   --dry-run                Print the planned trials without launching agents.
 `;
@@ -91,6 +142,9 @@ function parseArgs(argv) {
       case "--limit":
         opts.limit = Number.parseInt(next(), 10);
         break;
+      case "--modes":
+        opts.modes = next();
+        break;
       case "--run-dir":
         opts.runDir = next();
         break;
@@ -128,8 +182,25 @@ function parseArgs(argv) {
   if (!Number.isInteger(opts.limit) || opts.limit < 1) {
     throw new Error("--limit must be a positive integer.");
   }
+  opts.modes = parseModes(opts.modes);
 
   return opts;
+}
+
+function parseModes(value) {
+  const modes = String(value)
+    .split(",")
+    .map((mode) => mode.trim())
+    .filter(Boolean);
+  if (!modes.length) {
+    throw new Error("--modes must include at least one mode.");
+  }
+  for (const mode of modes) {
+    if (!MODE_CONFIGS[mode]) {
+      throw new Error(`Unknown mode: ${mode}. Available modes: ${Object.keys(MODE_CONFIGS).join(", ")}`);
+    }
+  }
+  return modes;
 }
 
 function run(cmd, args, options = {}) {
@@ -344,6 +415,7 @@ function createEntireShim(trialDir) {
 }
 
 function prepareTrial(root, trialDir, task, mode, branch, dryRun) {
+  const modeConfig = MODE_CONFIGS[mode];
   fs.mkdirSync(path.dirname(trialDir), { recursive: true });
   run("git", ["worktree", "add", "-B", branch, trialDir, task.base], {
     cwd: root,
@@ -356,7 +428,7 @@ function prepareTrial(root, trialDir, task, mode, branch, dryRun) {
   appendExclude(trialDir);
   fs.mkdirSync(path.join(trialDir, ".bench"), { recursive: true });
 
-  if (mode === "baseline") {
+  if (modeConfig.rootKind === "baseline") {
     run("entire", ["disable", "--force"], {
       cwd: trialDir,
       check: false,
@@ -366,7 +438,7 @@ function prepareTrial(root, trialDir, task, mode, branch, dryRun) {
       env: {
         ...process.env,
         PATH: `${shimDir}${path.delimiter}${process.env.PATH}`,
-        BENCH_MODE: "baseline",
+        BENCH_MODE: mode,
       },
     };
   }
@@ -378,7 +450,7 @@ function prepareTrial(root, trialDir, task, mode, branch, dryRun) {
   return {
     env: {
       ...process.env,
-      BENCH_MODE: "entire",
+      BENCH_MODE: mode,
     },
   };
 }
@@ -401,19 +473,7 @@ function criteriaText(task) {
 }
 
 function buildWorkerPrompt(task, mode, revision, feedbackPath) {
-  const modeInstructions =
-    mode === "entire"
-      ? [
-          "You are in the Entire-assisted arm of a benchmark.",
-          "Use Entire CLI strategically when it helps reduce rediscovery. Start with `entire status`.",
-          "For historical questions, start from local checkpoint metadata: run `entire checkpoint explain --json --limit 100`, filter the JSON/messages for relevant checkpoint IDs, then inspect targeted IDs with `entire checkpoint explain <id> --json --no-pager`.",
-          "If the broad checkpoint list is empty on a synthetic benchmark branch, use git commit trailers to discover IDs, for example `git log --all --format='%H %s%n%b' -- <relevant files>` and look for `Entire-Checkpoint:` before running targeted `entire checkpoint explain <id> --json --no-pager`.",
-          "Use `entire checkpoint search --json` only as an optional secondary source. If repo-scoped search returns empty or times out, record that briefly and continue with local checkpoint, code, and git evidence.",
-        ]
-      : [
-          "You are in the baseline arm of a benchmark.",
-          "Do not use Entire CLI, Entire checkpoint history, or `entire` commands. Use normal source inspection, git history, tests, and reasoning.",
-        ];
+  const modeInstructions = MODE_CONFIGS[mode].instructions;
 
   const revisionInstructions =
     revision === 0
@@ -688,7 +748,7 @@ function ignoredPathspecs() {
 }
 
 function runTrial({ task, mode, arm, rep, runDir, opts }) {
-  const root = mode === "baseline" ? opts.baselineRoot : opts.entireRoot;
+  const root = MODE_CONFIGS[mode].rootKind === "baseline" ? opts.baselineRoot : opts.entireRoot;
   const trialDir = path.join(runDir, task.id, `rep-${rep}`, arm);
   const branch = `bench/${slugPart(path.basename(runDir))}/${slugPart(task.id)}-r${rep}-${arm}`;
 
@@ -827,6 +887,7 @@ function runBenchmark(opts) {
     dryRun: opts.dryRun,
     workerModel: opts.workerModel,
     reviewerModel: opts.reviewerModel,
+    modes: opts.modes,
     replicates: opts.replicates,
     maxRevisions: opts.maxRevisions,
     tasks: tasks.map((task) => task.id),
@@ -845,7 +906,7 @@ function runBenchmark(opts) {
 
   for (const task of tasks) {
     for (let rep = 1; rep <= opts.replicates; rep += 1) {
-      const modes = shuffle(["baseline", "entire"]);
+      const modes = shuffle(opts.modes);
       modes.forEach((mode, index) => {
         const arm = `arm-${String.fromCharCode(97 + index)}`;
         const trial = runTrial({ task, mode, arm, rep, runDir, opts });

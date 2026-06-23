@@ -40,6 +40,10 @@ Saved pilot runs:
 - [corrected summary.json](benchmarks/token-cost/results/corrected-pilot-2026-06-23-run-2026-06-23T14-54-19-606Z-0bac51/summary.json)
 - [improved-harness summary.md](benchmarks/token-cost/results/improved-harness-2026-06-23-run-2026-06-23T18-11-07-499Z-3584e2/summary.md)
 - [improved-harness summary.json](benchmarks/token-cost/results/improved-harness-2026-06-23-run-2026-06-23T18-11-07-499Z-3584e2/summary.json)
+- [3-replicate summary.md](benchmarks/token-cost/results/replicates-3-2026-06-23-run-2026-06-23T19-42-56-421Z-109d16/summary.md)
+- [3-replicate summary.json](benchmarks/token-cost/results/replicates-3-2026-06-23-run-2026-06-23T19-42-56-421Z-109d16/summary.json)
+- [Level 2 ablation summary.md](benchmarks/token-cost/results/ablation-level-2-2026-06-23-run-2026-06-23T20-47-04-297Z-0bfc68/summary.md)
+- [Level 2 ablation summary.json](benchmarks/token-cost/results/ablation-level-2-2026-06-23-run-2026-06-23T20-47-04-297Z-0bfc68/summary.json)
 
 Important caveats:
 
@@ -58,6 +62,24 @@ Important caveats:
   the harness now tells the Entire arm to discover checkpoint IDs from
   `Entire-Checkpoint:` git trailers and then run targeted
   `entire checkpoint explain <id> --json --no-pager`.
+- The 3-replicate rerun showed high variance and reversed the single-run
+  headline: both modes passed all 9 trials, but Entire used 27.11% more worker
+  tokens overall. Level 2 evolution slightly favored Entire; progression and
+  favicon favored baseline.
+- The first Level 2 ablation showed all modes passing, with baseline cheapest
+  and `entire-search-first` the cheapest Entire strategy in that replicate.
+  This suggests command strategy changes behavior, but variance remains large.
+
+## Ablation Modes
+
+The harness supports `--modes` to compare command strategies:
+
+- `baseline`: blocks Entire and uses normal repo inspection.
+- `entire`: current balanced Entire prompt.
+- `entire-search-first`: starts with `entire checkpoint search --json`.
+- `entire-list-first`: starts with broad checkpoint metadata.
+- `entire-trailer-first`: starts from `Entire-Checkpoint:` git trailers, then
+  targeted `entire checkpoint explain`.
 
 ## Usage
 
@@ -78,6 +100,15 @@ node scripts/token-benchmark.mjs run \
   --max-revisions 2 \
   --worker-model gpt-5.5 \
   --reviewer-model gpt-5.4
+```
+
+Ablation example:
+
+```bash
+node scripts/token-benchmark.mjs run \
+  --execute \
+  --limit 1 \
+  --modes baseline,entire-search-first,entire-list-first,entire-trailer-first
 ```
 
 The script currently defaults to the local Planetfall repository paths used for
