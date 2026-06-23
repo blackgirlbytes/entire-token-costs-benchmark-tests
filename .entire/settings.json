@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "strategy_options": {
+    "checkpoint_remote": {
+      "provider": "github",
+      "repo": "blackgirlbytes/entire-token-costs-benchmark-tests"
+    }
+  }
+}
