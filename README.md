@@ -69,6 +69,10 @@ Important caveats:
 - The first Level 2 ablation showed all modes passing, with baseline cheapest
   and `entire-search-first` the cheapest Entire strategy in that replicate.
   This suggests command strategy changes behavior, but variance remains large.
+- The gated Entire run avoided broad search/list calls and used only targeted
+  checkpoint probes, but still used 34.77% more worker tokens than baseline
+  across the three tasks. See the
+  [gated summary](benchmarks/token-cost/results/gated-2026-06-23-run-2026-06-23T21-11-46-371Z-3c924f/summary.md).
 
 ## Ablation Modes
 
@@ -80,6 +84,7 @@ The harness supports `--modes` to compare command strategies:
 - `entire-list-first`: starts with broad checkpoint metadata.
 - `entire-trailer-first`: starts from `Entire-Checkpoint:` git trailers, then
   targeted `entire checkpoint explain`.
+- `entire-gated`: caps Entire to a small evidence probe and falls back quickly.
 
 ## Usage
 
@@ -108,7 +113,7 @@ Ablation example:
 node scripts/token-benchmark.mjs run \
   --execute \
   --limit 1 \
-  --modes baseline,entire-search-first,entire-list-first,entire-trailer-first
+  --modes baseline,entire-search-first,entire-list-first,entire-trailer-first,entire-gated
 ```
 
 The script currently defaults to the local Planetfall repository paths used for

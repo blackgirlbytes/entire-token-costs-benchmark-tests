@@ -66,6 +66,16 @@ const MODE_CONFIGS = {
       "Avoid broad `entire checkpoint search --json` unless git trailers do not reveal useful checkpoint IDs.",
     ],
   },
+  "entire-gated": {
+    rootKind: "entire",
+    instructions: [
+      "You are in the Entire gated ablation arm of a benchmark.",
+      "Use Entire only as a small evidence probe, not as a second research project. Start with `entire status`.",
+      "For history or intent questions, identify 1-3 relevant files, then run one git trailer command such as `git log --all --format='%H %s%n%b' -- <relevant files>` and look for `Entire-Checkpoint:`.",
+      "If you find a clearly relevant checkpoint ID, inspect at most two IDs with `entire checkpoint explain <id> --json --no-pager`.",
+      "Do not run broad checkpoint search or list commands unless the task cannot be answered otherwise. If the initial probe has no useful signal after 3 commands, stop using Entire and continue with normal source, git, and test evidence.",
+    ],
+  },
 };
 
 const usage = `Usage:
