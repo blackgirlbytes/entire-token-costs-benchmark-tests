@@ -27,19 +27,28 @@ recorded separately as experiment overhead.
 
 - `baseline`: Entire is disabled and `entire` commands are blocked.
 - `entire`: Entire is enabled and the worker is encouraged to use targeted
-  checkpoint/search/explain commands when useful.
+  checkpoint/explain commands first, with search as an optional secondary
+  source when it returns useful repo-scoped results.
 
 ## Current Pilot
 
-The first saved pilot is here:
+Saved pilot runs:
 
 - [summary.md](benchmarks/token-cost/results/pilot-2026-06-23-run-2026-06-23T08-15-33-275Z-4528a2/summary.md)
 - [summary.json](benchmarks/token-cost/results/pilot-2026-06-23-run-2026-06-23T08-15-33-275Z-4528a2/summary.json)
+- [corrected summary.md](benchmarks/token-cost/results/corrected-pilot-2026-06-23-run-2026-06-23T14-54-19-606Z-0bac51/summary.md)
+- [corrected summary.json](benchmarks/token-cost/results/corrected-pilot-2026-06-23-run-2026-06-23T14-54-19-606Z-0bac51/summary.json)
 
-Important caveat: that pilot was launched before setup rewrote benchmark clone
-remotes back to the real GitHub `origin` URL. Entire checkpoint search was
-therefore impaired or unhelpful inside child sessions. Treat it as a
-loop-mechanics pilot, not a final estimate.
+Important caveats:
+
+- The first pilot was launched before setup rewrote benchmark clone remotes back
+  to the real GitHub `origin` URL. Treat it as a loop-mechanics pilot, not a
+  final estimate.
+- A follow-up diagnostic found that auth is healthy, but repo-scoped
+  `entire checkpoint search` currently returns zero Planetfall results or times
+  out. Local `entire checkpoint explain --json --limit 100` works in both the
+  source repo and benchmark clone. See the
+  [diagnostic summary](benchmarks/token-cost/results/diagnostic-2026-06-23-entire-search-vs-explain/summary.md).
 
 ## Usage
 
@@ -71,4 +80,3 @@ and `--runs-root` to run it somewhere else.
 Raw child-agent JSONL logs are intentionally ignored. They can contain full
 agent transcripts, local paths, and repository context. Commit summarized
 results deliberately.
-
