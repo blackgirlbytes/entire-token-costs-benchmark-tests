@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.DS_Store
+.env*
+
+# Full benchmark runs can contain raw agent transcripts, local paths, and
+# repository context. Commit summarized results intentionally instead.
+runs/
+raw-runs/
+*.jsonl
+*.stderr.log
+.bench/
+

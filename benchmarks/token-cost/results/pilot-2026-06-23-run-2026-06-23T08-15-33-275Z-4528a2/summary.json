@@ -1,0 +1,113 @@
+{
+  "runId": "run-2026-06-23T08-15-33-275Z-4528a2",
+  "runDir": "/Users/goose-guest/Documents/work/planetfall-bench-runs/run-2026-06-23T08-15-33-275Z-4528a2",
+  "workerModel": "gpt-5.5",
+  "reviewerModel": "gpt-5.4",
+  "caveat": "This pilot was launched before benchmark setup rewrote cloned roots back to the real GitHub origin URL. Entire checkpoint search was impaired or unhelpful in child sessions, so treat this as a loop-mechanics pilot rather than a final estimate.",
+  "modes": [
+    {
+      "mode": "baseline",
+      "trials": 3,
+      "pass": 3,
+      "revise": 0,
+      "fail": 0,
+      "workerUsage": {
+        "input_tokens": 1248534,
+        "cached_input_tokens": 974976,
+        "output_tokens": 22631,
+        "reasoning_output_tokens": 9223,
+        "total_tokens": 1271165
+      },
+      "reviewerUsage": {
+        "input_tokens": 244325,
+        "cached_input_tokens": 154112,
+        "output_tokens": 4093,
+        "reasoning_output_tokens": 707,
+        "total_tokens": 248418
+      }
+    },
+    {
+      "mode": "entire",
+      "trials": 3,
+      "pass": 3,
+      "revise": 0,
+      "fail": 0,
+      "workerUsage": {
+        "input_tokens": 1798817,
+        "cached_input_tokens": 1511424,
+        "output_tokens": 21718,
+        "reasoning_output_tokens": 6627,
+        "total_tokens": 1820535
+      },
+      "reviewerUsage": {
+        "input_tokens": 162318,
+        "cached_input_tokens": 100480,
+        "output_tokens": 2043,
+        "reasoning_output_tokens": 475,
+        "total_tokens": 164361
+      }
+    }
+  ],
+  "trials": [
+    {
+      "taskId": "level-2-evolution",
+      "mode": "baseline",
+      "rep": 1,
+      "verdict": "PASS",
+      "workerTokens": 511045,
+      "reviewerTokens": 57829,
+      "trialDir": "/Users/goose-guest/Documents/work/planetfall-bench-runs/run-2026-06-23T08-15-33-275Z-4528a2/level-2-evolution/rep-1/arm-a"
+    },
+    {
+      "taskId": "level-2-evolution",
+      "mode": "entire",
+      "rep": 1,
+      "verdict": "PASS",
+      "workerTokens": 866864,
+      "reviewerTokens": 16158,
+      "trialDir": "/Users/goose-guest/Documents/work/planetfall-bench-runs/run-2026-06-23T08-15-33-275Z-4528a2/level-2-evolution/rep-1/arm-b"
+    },
+    {
+      "taskId": "level-progression-navigation",
+      "mode": "baseline",
+      "rep": 1,
+      "verdict": "PASS",
+      "workerTokens": 391743,
+      "reviewerTokens": 102550,
+      "trialDir": "/Users/goose-guest/Documents/work/planetfall-bench-runs/run-2026-06-23T08-15-33-275Z-4528a2/level-progression-navigation/rep-1/arm-a"
+    },
+    {
+      "taskId": "level-progression-navigation",
+      "mode": "entire",
+      "rep": 1,
+      "verdict": "PASS",
+      "workerTokens": 790288,
+      "reviewerTokens": 110953,
+      "trialDir": "/Users/goose-guest/Documents/work/planetfall-bench-runs/run-2026-06-23T08-15-33-275Z-4528a2/level-progression-navigation/rep-1/arm-b"
+    },
+    {
+      "taskId": "planetfall-favicon-replay",
+      "mode": "entire",
+      "rep": 1,
+      "verdict": "PASS",
+      "workerTokens": 163383,
+      "reviewerTokens": 37250,
+      "trialDir": "/Users/goose-guest/Documents/work/planetfall-bench-runs/run-2026-06-23T08-15-33-275Z-4528a2/planetfall-favicon-replay/rep-1/arm-a"
+    },
+    {
+      "taskId": "planetfall-favicon-replay",
+      "mode": "baseline",
+      "rep": 1,
+      "verdict": "PASS",
+      "workerTokens": 368377,
+      "reviewerTokens": 88039,
+      "trialDir": "/Users/goose-guest/Documents/work/planetfall-bench-runs/run-2026-06-23T08-15-33-275Z-4528a2/planetfall-favicon-replay/rep-1/arm-b"
+    }
+  ],
+  "workerTokenDelta": {
+    "baselineTokens": 1271165,
+    "entireTokens": 1820535,
+    "savingsTokens": -549370,
+    "savingsPct": -0.43217835607493915
+  }
+}

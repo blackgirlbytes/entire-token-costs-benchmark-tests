@@ -1,0 +1,42 @@
+[
+  {
+    "id": "level-2-evolution",
+    "kind": "answer",
+    "base": "origin/main",
+    "prompt": "Explain how Planetfall Level 2 evolved over time. Ground the answer in repository evidence and cite specific files, commits, or checkpoint/session evidence when available.",
+    "acceptanceCriteria": [
+      "Mentions the shift toward the command-pass/order-ticket/drone-bay gameplay loop.",
+      "Cites relevant project files such as README.md, PLAN.md, or src/droneBayView.js.",
+      "Distinguishes recorded history from code inference when the evidence supports that distinction.",
+      "Gives a useful, concise explanation rather than a raw dump of logs."
+    ]
+  },
+  {
+    "id": "level-progression-navigation",
+    "kind": "answer",
+    "base": "origin/main",
+    "prompt": "Explain how the game decides which level comes next. Cite the relevant files and functions, and call out any URL shortcut or end-state behavior that affects progression.",
+    "acceptanceCriteria": [
+      "Identifies the main progression flow in src/main.js or related level view files.",
+      "Explains how Level 1, Level 2, and Level 3 hand off to each other.",
+      "Mentions relevant query-string shortcuts or end-state shortcuts if present.",
+      "Avoids unsupported claims about behavior that is not in the code."
+    ]
+  },
+  {
+    "id": "planetfall-favicon-replay",
+    "kind": "code",
+    "base": "fcc8dd2^",
+    "prompt": "Add a Planetfall browser tab icon. Use a checked-in SVG favicon that fits the game's orbit/planet identity, wire it into the HTML head, and keep the Vite build passing.",
+    "installDependencies": true,
+    "checks": [
+      "npm run build"
+    ],
+    "acceptanceCriteria": [
+      "Adds or updates an SVG favicon asset under public/.",
+      "Wires the favicon into index.html with an appropriate link tag.",
+      "Keeps the change narrow and avoids unrelated game or styling edits.",
+      "npm run build passes."
+    ]
+  }
+]
