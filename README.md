@@ -38,6 +38,8 @@ Saved pilot runs:
 - [summary.json](benchmarks/token-cost/results/pilot-2026-06-23-run-2026-06-23T08-15-33-275Z-4528a2/summary.json)
 - [corrected summary.md](benchmarks/token-cost/results/corrected-pilot-2026-06-23-run-2026-06-23T14-54-19-606Z-0bac51/summary.md)
 - [corrected summary.json](benchmarks/token-cost/results/corrected-pilot-2026-06-23-run-2026-06-23T14-54-19-606Z-0bac51/summary.json)
+- [improved-harness summary.md](benchmarks/token-cost/results/improved-harness-2026-06-23-run-2026-06-23T18-11-07-499Z-3584e2/summary.md)
+- [improved-harness summary.json](benchmarks/token-cost/results/improved-harness-2026-06-23-run-2026-06-23T18-11-07-499Z-3584e2/summary.json)
 
 Important caveats:
 
@@ -49,6 +51,13 @@ Important caveats:
   out. Local `entire checkpoint explain --json --limit 100` works in both the
   source repo and benchmark clone. See the
   [diagnostic summary](benchmarks/token-cost/results/diagnostic-2026-06-23-entire-search-vs-explain/summary.md).
+- After changing the Entire prompt to start from local checkpoint metadata, the
+  improved-harness rerun showed 31.10% fewer Entire worker tokens
+  (1,313,069 vs 1,905,634) and a higher pass rate (3/3 vs 2/3).
+- In synthetic benchmark branches, broad checkpoint listing may return `[]`;
+  the harness now tells the Entire arm to discover checkpoint IDs from
+  `Entire-Checkpoint:` git trailers and then run targeted
+  `entire checkpoint explain <id> --json --no-pager`.
 
 ## Usage
 

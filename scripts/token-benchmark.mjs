@@ -407,6 +407,7 @@ function buildWorkerPrompt(task, mode, revision, feedbackPath) {
           "You are in the Entire-assisted arm of a benchmark.",
           "Use Entire CLI strategically when it helps reduce rediscovery. Start with `entire status`.",
           "For historical questions, start from local checkpoint metadata: run `entire checkpoint explain --json --limit 100`, filter the JSON/messages for relevant checkpoint IDs, then inspect targeted IDs with `entire checkpoint explain <id> --json --no-pager`.",
+          "If the broad checkpoint list is empty on a synthetic benchmark branch, use git commit trailers to discover IDs, for example `git log --all --format='%H %s%n%b' -- <relevant files>` and look for `Entire-Checkpoint:` before running targeted `entire checkpoint explain <id> --json --no-pager`.",
           "Use `entire checkpoint search --json` only as an optional secondary source. If repo-scoped search returns empty or times out, record that briefly and continue with local checkpoint, code, and git evidence.",
         ]
       : [
