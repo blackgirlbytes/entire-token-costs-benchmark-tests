@@ -52,6 +52,20 @@ agent pay for both historical context and normal source investigation.
 
 ## What We Learned
 
+### Search Backend Caveat
+
+Follow-up product context from the research thread: Entire search is currently
+migrating to a different backend. That means the zero-result and timeout
+behavior from `entire checkpoint search` should be treated as a temporary-system
+snapshot, not as stable evidence that search-backed Entire workflows lack value.
+
+This matters because the benchmark's search-first arms may be unfairly
+penalized until the new search backend is live and healthy. We should revisit
+search-heavy benchmark modes after that migration before making a durable claim
+about Entire search and token cost.
+
+### Gated Run
+
 The gated prompt changed behavior in the intended direction:
 
 - No broad `entire checkpoint search` calls.

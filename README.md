@@ -55,6 +55,10 @@ Important caveats:
   out. Local `entire checkpoint explain --json --limit 100` works in both the
   source repo and benchmark clone. See the
   [diagnostic summary](benchmarks/token-cost/results/diagnostic-2026-06-23-entire-search-vs-explain/summary.md).
+- Follow-up product context: Entire search is currently migrating to a different
+  backend. Treat search-first benchmark results as a temporary-system snapshot,
+  not a stable estimate of what search-backed Entire usage can do. Revisit the
+  search-heavy arms after the new backend is live and healthy.
 - After changing the Entire prompt to start from local checkpoint metadata, the
   improved-harness rerun showed 31.10% fewer Entire worker tokens
   (1,313,069 vs 1,905,634) and a higher pass rate (3/3 vs 2/3).
