@@ -44,6 +44,8 @@ Saved pilot runs:
 - [3-replicate summary.json](benchmarks/token-cost/results/replicates-3-2026-06-23-run-2026-06-23T19-42-56-421Z-109d16/summary.json)
 - [Level 2 ablation summary.md](benchmarks/token-cost/results/ablation-level-2-2026-06-23-run-2026-06-23T20-47-04-297Z-0bfc68/summary.md)
 - [Level 2 ablation summary.json](benchmarks/token-cost/results/ablation-level-2-2026-06-23-run-2026-06-23T20-47-04-297Z-0bfc68/summary.json)
+- [post-search-fix summary.md](benchmarks/token-cost/results/post-search-fix-2026-07-01-run-2026-07-01T16-16-38-410Z-da5402/summary.md)
+- [post-search-fix summary.json](benchmarks/token-cost/results/post-search-fix-2026-07-01-run-2026-07-01T16-16-38-410Z-da5402/summary.json)
 
 Important caveats:
 
@@ -59,6 +61,11 @@ Important caveats:
   backend. Treat search-first benchmark results as a temporary-system snapshot,
   not a stable estimate of what search-backed Entire usage can do. Revisit the
   search-heavy arms after the new backend is live and healthy.
+- July 1 rerun after search began returning useful Planetfall results again:
+  all modes passed, balanced `entire` used 28.48% more worker tokens than
+  baseline overall, and `entire-search-first` used 98.97% more. Search is no
+  longer empty, but search-first needs tighter result caps. See the
+  [post-search-fix summary](benchmarks/token-cost/results/post-search-fix-2026-07-01-run-2026-07-01T16-16-38-410Z-da5402/summary.md).
 - After changing the Entire prompt to start from local checkpoint metadata, the
   improved-harness rerun showed 31.10% fewer Entire worker tokens
   (1,313,069 vs 1,905,634) and a higher pass rate (3/3 vs 2/3).

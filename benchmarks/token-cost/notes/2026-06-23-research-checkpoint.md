@@ -50,6 +50,20 @@ agent pay for both historical context and normal source investigation.
    - Result file:
      `benchmarks/token-cost/results/gated-2026-06-23-run-2026-06-23T21-11-46-371Z-3c924f/summary.md`.
 
+4. Post-search-fix rerun on July 1:
+   - Direct preflight probe: `entire checkpoint search --json "Level 2"`
+     returned 68 Planetfall results, including checkpoints, sessions, commits,
+     and PRs.
+   - Baseline: 3/3 pass, 1,151,083 worker tokens.
+   - `entire`: 3/3 pass, 1,478,916 worker tokens.
+   - `entire-search-first`: 3/3 pass, 2,290,286 worker tokens.
+   - Balanced `entire` used 28.48% more worker tokens than baseline overall,
+     but beat baseline on the level-progression-navigation task in this
+     replicate.
+   - `entire-search-first` used 98.97% more worker tokens than baseline overall.
+   - Result file:
+     `benchmarks/token-cost/results/post-search-fix-2026-07-01-run-2026-07-01T16-16-38-410Z-da5402/summary.md`.
+
 ## What We Learned
 
 ### Search Backend Caveat
@@ -63,6 +77,13 @@ This matters because the benchmark's search-first arms may be unfairly
 penalized until the new search backend is live and healthy. We should revisit
 search-heavy benchmark modes after that migration before making a durable claim
 about Entire search and token cost.
+
+On July 1, search began returning useful Planetfall results again. The rerun
+shifted the interpretation: search correctness was no longer the blocker, but
+the search-first prompt still spent heavily because workers issued multiple
+queries, explained several checkpoints, loaded skill files, and then performed
+normal source inspection. The next search-specific benchmark should cap result
+handling much more aggressively.
 
 ### Gated Run
 
@@ -106,12 +127,17 @@ replicates:
    explains, but explicitly forbid reading `.codex/skills/using-entire/SKILL.md`
    or other local skill files inside child trials.
 
-2. `entire-precomputed-context`: have the harness run the Entire lookup before
+2. `entire-search-capped`: allow one targeted `entire checkpoint search` query,
+   inspect only the top 1-2 results, run at most one targeted
+   `entire checkpoint explain`, and then stop using Entire. This tests whether
+   the repaired search backend can help when result handling is disciplined.
+
+3. `entire-precomputed-context`: have the harness run the Entire lookup before
    the worker starts, then pass a small checkpoint excerpt bundle to both arms
    or to a dedicated Entire arm. This tests whether the historical evidence
    itself helps without charging every worker for discovery mechanics.
 
-3. Task-fit split: add tasks where history should matter more than source
+4. Task-fit split: add tasks where history should matter more than source
    inspection, such as "why did this design change", "restore removed behavior",
    or "continue a prior partial implementation from checkpoint intent".
 
